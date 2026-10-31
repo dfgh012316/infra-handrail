@@ -1,5 +1,5 @@
 import type { EngineInterface } from 'claude-code'
-import type { Targets } from '../types'
+import type { TargetName, Targets } from '../types'
 
 // The ambient targets a command takes when it names none. Read from the
 // tools' own config files where that is cheap; kubectl itself for kube, as
@@ -70,22 +70,34 @@ async function aws($: Engine, home: string): Promise<string | undefined> {
 }
 
 // argocd keeps its config in ARGOCD_CONFIG_DIR, else the legacy ~/.argocd
-// when it exists, else the XDG folder; ARGOCD_SERVER overrides the context.
+// when it exists, else the XDG folder.
+export async function argocdConfig($: Engine, home: string): Promise<string | undefined> {
+  const dir = await $.env.get('ARGOCD_CONFIG_DIR')
+  if (dir) return readText($, `${dir}/config`)
+  const xdg = (await $.env.get('XDG_CONFIG_HOME')) ?? `${home}/.config`
+  return (await readText($, `${home}/.argocd/config`)) ?? (await readText($, `${xdg}/argocd/config`))
+}
+
+// ARGOCD_SERVER overrides the context.
 async function argocd($: Engine, home: string): Promise<string | undefined> {
   const server = await $.env.get('ARGOCD_SERVER')
   if (server) return `${server} (env)`
-  const dir = await $.env.get('ARGOCD_CONFIG_DIR')
-  const xdg = (await $.env.get('XDG_CONFIG_HOME')) ?? `${home}/.config`
-  const config = dir
-    ? await readText($, `${dir}/config`)
-    : ((await readText($, `${home}/.argocd/config`)) ?? (await readText($, `${xdg}/argocd/config`)))
+  const config = await argocdConfig($, home)
   return config ? /^current-context:\s*['"]?([^\s'"]+)/m.exec(config)?.[1] : undefined
 }
 
-export async function readTargets($: Engine): Promise<Targets> {
+// Only the targets asked for are read: a target left out is never looked up.
+export async function readTargets($: Engine, which: readonly TargetName[]): Promise<Targets> {
   const home = (await $.env.get('HOME')) ?? ''
-  const [k, g, h, a, cd] = await Promise.all([kube($), gcloud($, home), gh($, home), aws($, home), argocd($, home)])
-  return { kube: k, gcloud: g, gh: h, aws: a, argocd: cd }
+  const read: Record<TargetName, () => Promise<string | undefined>> = {
+    kube: () => kube($),
+    gcloud: () => gcloud($, home),
+    gh: () => gh($, home),
+    aws: () => aws($, home),
+    argocd: () => argocd($, home),
+  }
+  const values = await Promise.all(which.map(name => read[name]()))
+  return Object.fromEntries(which.map((name, i) => [name, values[i]])) as Targets
 }
 
 export function prodTargets(t: Targets | null, pattern: RegExp): string[] {

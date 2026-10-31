@@ -14,8 +14,9 @@ IG="${IG:-/tmp/ig-verify}"
 here="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$IG/work"
 
-# One context, named so the band shows it as production, pointing at a port
-# nothing listens on: a command that slips past the guards fails to connect.
+# Two contexts pointing at a port nothing listens on, so a command that slips
+# past the guards fails to connect: ig-verify-prod, current, named so the band
+# shows it as production; ig-verify-dev for the options' production modes.
 # The user holds a dummy token, as with no credential kubectl asks for a
 # username and the command would wait on a prompt instead.
 cat > "$IG/kubeconfig" <<'EOF'
@@ -27,6 +28,10 @@ clusters:
     server: https://127.0.0.1:9
 contexts:
 - name: ig-verify-prod
+  context:
+    cluster: ig-verify-prod
+    user: nobody
+- name: ig-verify-dev
   context:
     cluster: ig-verify-prod
     user: nobody

@@ -445,7 +445,7 @@ describe('the script review', () => {
     return s
   }
   const pane = ($: Engine) =>
-    $.ui.mount({ plugin: 'infra-guard', surface: 'terminal', component: 'Pane', requestId: 'script-review', props: PANE })
+    $.ui.mount({ plugin: 'infra-handrail', surface: 'terminal', component: 'Pane', requestId: 'script-review', props: PANE })
 
   test('shows every script whole in a pane, and runs the call once the person approves it', async ($, on) => {
     const { ran, asked, audit } = engine(on, { files: { '/w/up.sh': SCRIPT } })
@@ -512,7 +512,7 @@ describe('the script review', () => {
     expect(refused(await $.tool.call(RUN))).toContain('from a row above the prompt')
     expect(s.closed).toContain('script-review')
 
-    const band = await $.ui.mount({ plugin: 'infra-guard', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+    const band = await $.ui.mount({ plugin: 'infra-handrail', surface: 'terminal', component: 'AbovePrompt', props: BAND })
     s.placed = true
     await band.press({ key: 'review-open' })
     expect(s.opened).toBe(2)
@@ -531,7 +531,7 @@ describe('the script review', () => {
     const { ran, clock } = engine(on, { files: { '/w/up.sh': SCRIPT } })
     const s = surface(on)
     // The engine's answers beneath what a reload raises.
-    on('tool.register', ($, e) => ({ value: { tool: `mcp__infra-guard__${e.name}` } }))
+    on('tool.register', ($, e) => ({ value: { tool: `mcp__infra-handrail__${e.name}` } }))
     on('command.register', ($, e) => ({ value: { command: e.name } }))
     on('session.start', ($, e) => ({ cwd: e.cwd }))
     expect(refused(await $.tool.call(RUN))).toContain('reviewing it in a pane')

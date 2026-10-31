@@ -1,4 +1,5 @@
 export type Targets = { kube?: string; gcloud?: string; gh?: string; aws?: string; argocd?: string }
+export type TargetName = keyof Targets
 
 export type AuditEntry = {
   at: string
@@ -42,6 +43,6 @@ export type PendingReview = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'infra-guard': { targets: Targets | null; watches: Watch[]; pending: PendingPaste | null; scrubSkipped: boolean; review: PendingReview | null }
+    'infra-handrail': { targets: Targets | null; watches: Watch[]; pending: PendingPaste | null; scrubSkipped: boolean; review: PendingReview | null }
   }
 }

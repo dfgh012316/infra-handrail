@@ -4,7 +4,7 @@ import type { AuditEntry } from '../types'
 
 export const HOME = '/home/u'
 // Props a surface draws a pane and the band with.
-export const PANE = { title: 'infra-guard', isFocused: true, bodyColumns: 80, placement: 'inline', scroll: { offset: 0, bodyRows: 5 }, view: {} } as const
+export const PANE = { title: 'infra-handrail', isFocused: true, bodyColumns: 80, placement: 'inline', scroll: { offset: 0, bodyRows: 5 }, view: {} } as const
 export const BAND = { hasSurvey: false, isWorking: true, maxRows: 12, bodyColumns: 80, scroll: { offset: 0, bodyRows: 12 }, view: {} } as const
 
 export function exited(exitCode: number, stdout: string, stderr = '') {
@@ -30,7 +30,11 @@ export function engine(on: On, { files = {}, answer = 'Cancel', bash = () => 'ok
   mock.env(on, { HOME, ...env })
   on('session.cwd', () => ({ value: '/w' }))
   on('session.id', () => ({ value: 'session-1' }))
-  on('fs.read', ($, e) => (e.path in files ? { value: files[e.path]! } : { deny: 'missing' }))
+  const reads: string[] = []
+  on('fs.read', ($, e) => {
+    reads.push(e.path)
+    return e.path in files ? { value: files[e.path]! } : { deny: 'missing' }
+  })
   const asked: string[] = []
   on('tool.call', { tool: 'AskUserQuestion' }, ($, e) => {
     asked.push(e.questions[0]!.question)
@@ -41,5 +45,5 @@ export function engine(on: On, { files = {}, answer = 'Cancel', bash = () => 'ok
     ran.push(e.command)
     return { result: { stdout: bash(), stderr: '', interrupted: false } }
   })
-  return { ran, asked, clock, audit: () => (store.get('audit') as AuditEntry[] | undefined) ?? [] }
+  return { ran, asked, reads, clock, audit: () => (store.get('audit') as AuditEntry[] | undefined) ?? [] }
 }

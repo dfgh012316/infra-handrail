@@ -1,15 +1,28 @@
 {
-  "name": "infra-guard",
+  "name": "infra-handrail",
   "version": "1.0.0",
   "description": "Guards infra work from Claude Code: shows the ambient kube/gcloud/gh/aws/argocd targets, requires named contexts and approved terraform/OpenTofu/terragrunt plans, reads scripts before they run, keeps Secret values from the model, logs changes and watches rollouts.",
   "author": {
     "name": "Jerry Chuang",
     "url": "https://github.com/dfgh012316"
   },
-  "homepage": "https://github.com/dfgh012316/infra-guard",
-  "repository": "https://github.com/dfgh012316/infra-guard",
+  "homepage": "https://github.com/dfgh012316/infra-handrail",
+  "repository": "https://github.com/dfgh012316/infra-handrail",
   "license": "Apache-2.0",
-  "keywords": ["kubernetes", "kubectl", "helm", "helmfile", "terraform", "opentofu", "terragrunt", "argocd", "secrets", "devops", "sre", "guardrails"],
+  "keywords": [
+    "kubernetes",
+    "kubectl",
+    "helm",
+    "helmfile",
+    "terraform",
+    "opentofu",
+    "terragrunt",
+    "argocd",
+    "secrets",
+    "devops",
+    "sre",
+    "guardrails"
+  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "prodPattern": {
@@ -18,11 +31,81 @@
       "description": "Regular expression; a target name that matches is shown as production",
       "default": "prod|prd|production"
     },
+    "namedTargets": {
+      "type": "string",
+      "title": "Named targets",
+      "description": "When a kubectl, helm, helmfile or argocd command that changes a cluster must name its context: always, only when the ambient one matches prodPattern (production), or never (off)",
+      "default": "always",
+      "options": [
+        "always",
+        "production",
+        "off"
+      ]
+    },
+    "scriptCheck": {
+      "type": "string",
+      "title": "Script check",
+      "description": "When a script that would act on the ambient target waits for your review before it runs: always, only when an ambient target matches prodPattern (production), or never (off)",
+      "default": "always",
+      "options": [
+        "always",
+        "production",
+        "off"
+      ]
+    },
+    "terraformGate": {
+      "type": "boolean",
+      "title": "Terraform plan gate",
+      "description": "terraform, tofu and terragrunt apply only from a saved plan you approved; destroy only after you confirm",
+      "default": true
+    },
+    "secretGuard": {
+      "type": "boolean",
+      "title": "Refuse printing secrets",
+      "description": "Refuse commands that would print Kubernetes Secret data or a cloud secret manager's value",
+      "default": true
+    },
     "allowHelmGet": {
       "type": "boolean",
       "title": "Allow helm get",
       "description": "Let `helm get values`, `helm get manifest` and `helm get all` run. Turn it on where chart values hold no credentials; rendered Secrets in a manifest are still printed",
       "default": false
+    },
+    "secretTools": {
+      "type": "boolean",
+      "title": "Secret tools",
+      "description": "Give Claude secret_rotate, secret_set, secret_keys and leak_check, and withhold output carrying a value they handled. Off: fewer tools in every session",
+      "default": true
+    },
+    "watchTools": {
+      "type": "boolean",
+      "title": "Watch tools",
+      "description": "Give Claude watch_start and watch_stop for Deployment rollouts and GitHub Actions runs",
+      "default": true
+    },
+    "targets": {
+      "type": "string",
+      "title": "Targets",
+      "description": "Comma-separated ambient targets to read, show and check for production, from kube, gcloud, gh, aws and argocd. One left out is never read",
+      "default": "kube,gcloud,gh,aws,argocd"
+    },
+    "band": {
+      "type": "boolean",
+      "title": "Targets above the prompt",
+      "description": "Show the ambient targets in a row above the prompt",
+      "default": true
+    },
+    "audit": {
+      "type": "boolean",
+      "title": "Audit log",
+      "description": "Log infra changes, refusals and Secret writes for /timeline",
+      "default": true
+    },
+    "approveAtPermissionCheck": {
+      "type": "boolean",
+      "title": "Allow what you approved here",
+      "description": "A script or plan you approved in this mod's review or dialog is allowed at the permission check instead of being asked about again",
+      "default": true
     }
   }
 }

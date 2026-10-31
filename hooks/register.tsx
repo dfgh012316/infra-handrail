@@ -3,6 +3,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { AuditEntry, PendingPaste, PendingReview, ReviewScript, Targets, Watch } from '../types'
 import { settle, shown } from './approval'
 import { mask, targetLine, timeline } from './audit'
+import { readConfig, type Config } from './config'
+import { configFacts } from './facts'
 import { CONTEXT, DNS_NAME, REPO } from './names'
 import { describeFindings, scanScript, WHY, type Finding } from './script'
 import {
@@ -22,7 +24,6 @@ import {
   SET,
   setFromFile,
   startPaste,
-  type ReadOptions,
 } from './secrets'
 import { calls, isWrite, mentionsInfra, namesTarget, scriptRuns, switchesTarget, type Call } from './shell'
 import { prodTargets, readTargets } from './targets'
@@ -43,13 +44,17 @@ import { ghRunProgress, rolloutProgress } from './watch'
 // 6. a call the person approved in one of these dialogs runs on that answer,
 //    the permission mode not asking again, when the dialog showed the whole
 //    command line (approval.ts).
+// Each guard is switched and scoped by the options (config.ts); the defaults
+// turn every one on.
 
 type Engine = EngineInterface
 type Where = { cwd: string; home: string }
 type Gate = { deny?: string; confirmed?: string }
 type Shown = ReturnType<typeof shown>
 
-const PLUGIN = 'infra-guard'
+const PLUGIN = 'infra-handrail'
+// A dialog's header is cut past 12 characters.
+const HEADER = 'handrail'
 const AUDIT_KEY = 'audit'
 const AUDIT_LIMIT = 1000
 const TICK_MS = 5000
@@ -65,13 +70,13 @@ const CONTEXT_FLAG: Partial<Record<Call['tool'], string>> = {
 // passing the ambient one could move a helmfile that names its own.
 const HELMFILE_NOTE = ' If the helmfile sets kubeContext itself, pass that same context.'
 
-const targets = atom({ plugin: 'infra-guard', key: 'targets' } as const, null as Targets | null)
-const watches = atom({ plugin: 'infra-guard', key: 'watches' } as const, [] as Watch[])
-const pending = atom({ plugin: 'infra-guard', key: 'pending' } as const, null as PendingPaste | null)
+const targets = atom({ plugin: 'infra-handrail', key: 'targets' } as const, null as Targets | null)
+const watches = atom({ plugin: 'infra-handrail', key: 'watches' } as const, [] as Watch[])
+const pending = atom({ plugin: 'infra-handrail', key: 'pending' } as const, null as PendingPaste | null)
 // Whether a plugin above this one sends stored rows on past it (README): set
 // when a turn starts after tool calls none of whose result rows came by, as
 // each is stored before the next turn starts.
-const scrubSkipped = atom({ plugin: 'infra-guard', key: 'scrubSkipped' } as const, false as boolean)
+const scrubSkipped = atom({ plugin: 'infra-handrail', key: 'scrubSkipped' } as const, false as boolean)
 let toolCalls = 0
 let resultRows = 0
 const LEAK_NOTE =
@@ -81,7 +86,7 @@ const LEAK_NOTE =
 const PASTE = 'secret-paste'
 // The pane a script run waits in for the person's review, and what it draws.
 const REVIEW = 'script-review'
-const review = atom({ plugin: 'infra-guard', key: 'review' } as const, null as PendingReview | null)
+const review = atom({ plugin: 'infra-handrail', key: 'review' } as const, null as PendingReview | null)
 // Lines of one script the review draws; past them it says how many more.
 const REVIEW_LINES = 2000
 // A script run as the person reads it in the review: the call, the targets of
@@ -90,6 +95,9 @@ const REVIEW_LINES = 2000
 type Run = { command: string; cwd: string; ambient: string; scripts: [string, string][]; unread: string[] }
 let reviewing: Run | null = null
 let approval: Run | null = null
+
+// The options as read when the module loaded; a change reloads the module.
+let config: Config = readConfig({})
 
 // What Claude was last told of the targets: it hears again only on a change.
 let announced = ''
@@ -108,14 +116,14 @@ function short(path: string, home: string): string {
 }
 
 async function refresh($: Engine): Promise<Targets> {
-  const t = await readTargets($)
+  const t = await readTargets($, config.targets)
   await update($, targets, () => t)
   return t
 }
 
 async function ask($: Engine, question: string, yes: string): Promise<boolean> {
   try {
-    return (await $.ui.ask(question, { header: PLUGIN, options: [yes, 'Cancel'] })) === yes
+    return (await $.ui.ask(question, { header: HEADER, options: [yes, 'Cancel'] })) === yes
   } catch {
     return false
   }
@@ -175,7 +183,7 @@ async function terraformGate($: Engine, command: string, w: Where, line: Shown):
 
 // Reads each script the line runs (and those it runs, two levels down), each
 // from the directory it runs in.
-async function scriptGate($: Engine, command: string, w: Where, prod: RegExp, line: Shown): Promise<Gate> {
+async function scriptGate($: Engine, command: string, w: Where, line: Shown): Promise<Gate> {
   const queue = scriptRuns(command, w.cwd, w.home).map(run => ({ ...run, depth: 0 }))
   const seen = new Set<string>()
   const findings: Finding[] = []
@@ -203,7 +211,8 @@ async function scriptGate($: Engine, command: string, w: Where, prod: RegExp, li
   if (findings.length === 0 && unread.length === 0) return {}
   // Read now: the run binds the targets it would take.
   const t = await refresh($)
-  const onProd = prodTargets(t, prod)
+  const onProd = prodTargets(t, config.prod)
+  if (config.scriptCheck === 'production' && onProd.length === 0) return {}
   const run: Run = { command, cwd: w.cwd, ambient: targetLine(t), scripts: texts, unread }
   if (approved !== null && JSON.stringify(approved) === JSON.stringify(run)) {
     return { confirmed: `${findings.length} ambient command(s) in scripts, run as the person reviewed them` }
@@ -358,6 +367,7 @@ function reviewBody($: Engine, e: Parameters<Engine['ui']['resolve']>[0], r: Pen
 }
 
 async function record($: Engine, entry: AuditEntry) {
+  if (!config.audit) return
   const kept = ((await $.store.get(AUDIT_KEY)) as AuditEntry[] | undefined) ?? []
   await $.store.set(AUDIT_KEY, [...kept, entry].slice(-AUDIT_LIMIT))
 }
@@ -394,18 +404,26 @@ async function tick($: Engine, withTargets: boolean) {
   for (const w of await read($, watches)) if (w.state === 'running' && !polling.has(w.id)) void poll($, w, now)
 }
 
-function directGate(found: Call[], t: Targets | null, read: ReadOptions): Gate {
-  for (const call of found) {
-    const why = readsSecret(call, read)
-    if (why !== undefined) return { deny: `${PLUGIN}: refused, ${why}. List keys with ${KEYS}; change a value with ${ROTATE} or ${SET}.` }
+function directGate(found: Call[], t: Targets | null): Gate {
+  if (config.secretGuard) {
+    const tools = config.secretTools ? ` List keys with ${KEYS}; change a value with ${ROTATE} or ${SET}.` : ''
+    for (const call of found) {
+      const why = readsSecret(call, { allowHelmGet: config.allowHelmGet })
+      if (why !== undefined) return { deny: `${PLUGIN}: refused, ${why}.${tools}` }
+    }
   }
+  if (config.namedTargets === 'off') return {}
   for (const call of found) {
     const flag = CONTEXT_FLAG[call.tool]
-    if (flag !== undefined && isWrite(call) && !namesTarget(call)) {
-      const ambient = call.tool === 'argocd' ? `ambient argocd context: ${t?.argocd ?? 'unset'}` : `ambient kube-context: ${t?.kube ?? 'unset'}`
-      const note = call.tool === 'helmfile' ? HELMFILE_NOTE : ''
-      return { deny: `${PLUGIN}: refused, a command that changes a cluster must name its target with ${flag} (${ambient}).${note}` }
-    }
+    if (flag === undefined || !isWrite(call) || namesTarget(call)) continue
+    const which = call.tool === 'argocd' ? 'argocd' : 'kube'
+    const value = t?.[which]
+    // production: only where the target it would take is production.
+    if (config.namedTargets === 'production' && (value === undefined || !config.prod.test(value))) continue
+    const shown = value ?? (config.targets.includes(which) ? 'unset' : 'not read')
+    const ambient = which === 'argocd' ? `ambient argocd context: ${shown}` : `ambient kube-context: ${shown}`
+    const note = call.tool === 'helmfile' ? HELMFILE_NOTE : ''
+    return { deny: `${PLUGIN}: refused, a command that changes a cluster must name its target with ${flag} (${ambient}).${note}` }
   }
   return {}
 }
@@ -534,6 +552,22 @@ function pasteField($: Engine, e: Parameters<Engine['ui']['resolve']>[0], p: Pen
   )
 }
 
+// A command line that saves this mod's options or turns it off. Claude can
+// set them (the configure skill), so a change the person did not see would
+// loosen every guard at once: each one is asked about, whatever the options.
+function changesSelf(command: string): boolean {
+  const verb = /\bclaude\s+plugins?\s+(configure|disable|uninstall|remove|rm)\b/.exec(command)?.[1]
+  return verb !== undefined && command.includes(PLUGIN) && (verb !== 'configure' || command.includes('--values-stdin'))
+}
+
+async function selfGate($: Engine, line: Shown): Promise<Gate> {
+  const question = [`Claude is changing ${PLUGIN} itself: its options, or whether it runs.`, `Command: ${line.text}`, 'Allow it?'].join('\n')
+  if (!(await ask($, question, 'Allow'))) {
+    return { deny: `${PLUGIN}: the person did not allow this change to ${PLUGIN}. Its options change only when the person asks for it.` }
+  }
+  return { confirmed: `the person allowed a change to ${PLUGIN}` }
+}
+
 // A command line Claude runs, by Bash or as a Monitor's script: the gates,
 // then the run, its audit row and a note when the targets changed.
 async function guarded<R extends Ran & { isError?: true; context?: readonly string[] }>(
@@ -541,21 +575,27 @@ async function guarded<R extends Ran & { isError?: true; context?: readonly stri
   command: string,
   toolUseId: string | undefined,
   run: () => Promise<R>,
-  reads: ReadOptions,
-  prod: RegExp,
 ) {
   const w = await where($)
   const found = calls(command, w.cwd, w.home)
   const runs = scriptRuns(command, w.cwd, w.home)
-  if (found.length === 0 && runs.length === 0) return withheld(await run())
+  const self = changesSelf(command)
+  if (found.length === 0 && runs.length === 0 && !self) return withheld(await run())
 
   const started = await $.clock.now()
   const before = (await read($, targets)) ?? (await refresh($))
   const asShown = shown(command)
-  let gate = directGate(found, before, reads)
-  if (gate.deny === undefined) gate = await terraformGate($, command, w, asShown)
-  if (gate.deny === undefined && runs.length > 0) {
-    const scripted = await scriptGate($, command, w, prod, asShown)
+  let gate = self ? await selfGate($, asShown) : {}
+  if (gate.deny === undefined) {
+    const direct = directGate(found, before)
+    gate = { deny: direct.deny, confirmed: gate.confirmed }
+  }
+  if (gate.deny === undefined && config.terraformGate) {
+    const planned = await terraformGate($, command, w, asShown)
+    gate = { deny: planned.deny, confirmed: [gate.confirmed, planned.confirmed].filter(Boolean).join('; ') || undefined }
+  }
+  if (gate.deny === undefined && runs.length > 0 && config.scriptCheck !== 'off') {
+    const scripted = await scriptGate($, command, w, asShown)
     gate = { deny: scripted.deny, confirmed: [gate.confirmed, scripted.confirmed].filter(Boolean).join('; ') || undefined }
   }
   // Approved in a dialog that showed the whole line, the call is not asked
@@ -573,7 +613,7 @@ async function guarded<R extends Ran & { isError?: true; context?: readonly stri
   const ran = withheld(raw)
   const after = await refresh($)
 
-  if (gate.deny !== undefined || found.some(c => isWrite(c) || switchesTarget(c)) || runs.length > 0) {
+  if (gate.deny !== undefined || found.some(c => isWrite(c) || switchesTarget(c)) || runs.length > 0 || self) {
     await record($, {
       at: new Date(started).toISOString(),
       session: await $.session.id(),
@@ -606,6 +646,7 @@ async function noted<R extends { deny?: string; result?: unknown; context?: read
 // is skipped, leaving the verdict beneath, which asks as it did before. Each
 // allow is said in the transcript (not to Claude) and in the audit note.
 async function allowApproved<V extends Parameters<typeof settle>[0]>($: Engine, id: string | undefined, verdict: V) {
+  if (!config.approveAtPermissionCheck) return verdict
   const settled = settle(verdict, id, approved)
   if (settled !== verdict && id !== undefined) {
     overruled.add(id)
@@ -616,106 +657,115 @@ async function allowApproved<V extends Parameters<typeof settle>[0]>($: Engine, 
 }
 
 export const register: Register = (on, options) => {
-  let prod = /prod|prd|production/i
-  try {
-    prod = new RegExp(String(options.prodPattern ?? prod.source), 'i')
-  } catch {
-    // An unreadable pattern keeps the default.
-  }
-  const reads: ReadOptions = { allowHelmGet: options.allowHelmGet === true }
+  config = readConfig(options)
+  const prod = config.prod
 
   on('session.start', async ($, e, next) => {
-    await $.tool.register({
-      name: 'watch_start',
-      description:
-        'Hands a long-running operation to the harness to watch: a Deployment rollout or a GitHub Actions run. ' +
-        'The harness polls it read-only, shows it to the person, and sends you a message when it ends; ' +
-        'use this instead of sleep loops or repeated status commands.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          kind: { type: 'string', enum: ['rollout', 'gh-run'] },
-          context: { type: 'string', description: 'rollout: kubeconfig context name' },
-          kubeconfig: { type: 'string', description: 'rollout: absolute kubeconfig path; default kubectl\'s own' },
-          namespace: { type: 'string', description: 'rollout' },
-          deployment: { type: 'string', description: 'rollout: Deployment name' },
-          repo: { type: 'string', description: 'gh-run: owner/name' },
-          run: { type: 'integer', description: 'gh-run: workflow run id' },
-          timeoutMinutes: { type: 'integer', minimum: 1, maximum: 120, description: 'default 15' },
+    if (config.watchTools) {
+      await $.tool.register({
+        name: 'watch_start',
+        description:
+          'Hands a long-running operation to the harness to watch: a Deployment rollout or a GitHub Actions run. ' +
+          'The harness polls it read-only, shows it to the person, and sends you a message when it ends; ' +
+          'use this instead of sleep loops or repeated status commands.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            kind: { type: 'string', enum: ['rollout', 'gh-run'] },
+            context: { type: 'string', description: 'rollout: kubeconfig context name' },
+            kubeconfig: { type: 'string', description: 'rollout: absolute kubeconfig path; default kubectl\'s own' },
+            namespace: { type: 'string', description: 'rollout' },
+            deployment: { type: 'string', description: 'rollout: Deployment name' },
+            repo: { type: 'string', description: 'gh-run: owner/name' },
+            run: { type: 'integer', description: 'gh-run: workflow run id' },
+            timeoutMinutes: { type: 'integer', minimum: 1, maximum: 120, description: 'default 15' },
+          },
+          required: ['kind'],
         },
-        required: ['kind'],
-      },
-      isDeferred: false,
-    })
-    await $.tool.register({
-      name: 'watch_stop',
-      description: 'Stops a watch started with watch_start.',
-      inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-      isDeferred: false,
-    })
-    const secretTarget = {
-      kubeconfig: { type: 'string', description: 'absolute path of the kubeconfig file; default: kubectl\'s own' },
-      context: { type: 'string', description: 'kubeconfig context name' },
-      namespace: { type: 'string' },
-      secret: { type: 'string', description: 'name of an existing Secret' },
+        isDeferred: false,
+      })
+      await $.tool.register({
+        name: 'watch_stop',
+        description: 'Stops a watch started with watch_start.',
+        inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+        isDeferred: false,
+      })
+    }
+    if (config.secretTools) {
+      const secretTarget = {
+        kubeconfig: { type: 'string', description: 'absolute path of the kubeconfig file; default: kubectl\'s own' },
+        context: { type: 'string', description: 'kubeconfig context name' },
+        namespace: { type: 'string' },
+        secret: { type: 'string', description: 'name of an existing Secret' },
+      }
+      await $.tool.register({
+        name: 'secret_rotate',
+        description:
+          'Sets one key of an existing Kubernetes Secret to a new random value after the person confirms. ' +
+          'The value is generated and written by the harness and is never shown to you; you get key names, sizes, ' +
+          'fingerprints and whether the write was verified. Name the kube context explicitly.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            ...secretTarget,
+            key: { type: 'string', description: 'key inside the Secret to set' },
+            length: { type: 'integer', minimum: 16, maximum: 128, description: 'characters, default 32' },
+          },
+          required: ['context', 'namespace', 'secret', 'key'],
+        },
+        isDeferred: false,
+      })
+      await $.tool.register({
+        name: 'secret_set',
+        description:
+          'Sets one key of an existing Kubernetes Secret to a value the person supplies (for a token a vendor issued). ' +
+          'Without `file`, the harness opens a field where the person pastes the value, and returns at once; a message ' +
+          'arrives when it is set or cancelled. With `file`, it reads a file the person wrote and asks them to confirm. ' +
+          'The value goes to kubectl and is never shown to you: never ask for it in chat, and never read the file yourself.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            ...secretTarget,
+            key: { type: 'string', description: 'key inside the Secret to set' },
+            file: {
+              type: 'string',
+              description: 'only when the person wrote the value to a file: its absolute path; one trailing newline is dropped',
+            },
+          },
+          required: ['context', 'namespace', 'secret', 'key'],
+        },
+        isDeferred: false,
+      })
+      await $.tool.register({
+        name: 'secret_keys',
+        description:
+          'Lists the keys of a Kubernetes Secret with byte sizes and session-scoped fingerprints, never values. ' +
+          'Two keys with the same fingerprint hold the same value.',
+        inputSchema: { type: 'object', properties: secretTarget, required: ['context', 'namespace', 'secret'] },
+        isDeferred: false,
+      })
+      await $.tool.register({
+        name: 'leak_check',
+        description:
+          'Searches files for every Secret value this guard has minted or read in this session and answers only the names ' +
+          'of files that hold one. Default folders: ~/.claude (transcripts, history, debug logs) and Claude Code\'s temp ' +
+          'folder (the raw output of Monitors and background commands).',
+        inputSchema: {
+          type: 'object',
+          properties: { paths: { type: 'array', items: { type: 'string' }, description: 'absolute folders or files' } },
+        },
+        isDeferred: false,
+      })
     }
     await $.tool.register({
-      name: 'secret_rotate',
+      name: 'config_facts',
       description:
-        'Sets one key of an existing Kubernetes Secret to a new random value after the person confirms. ' +
-        'The value is generated and written by the harness and is never shown to you; you get key names, sizes, ' +
-        'fingerprints and whether the write was verified. Name the kube context explicitly.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          ...secretTarget,
-          key: { type: 'string', description: 'key inside the Secret to set' },
-          length: { type: 'integer', minimum: 16, maximum: 128, description: 'characters, default 32' },
-        },
-        required: ['context', 'namespace', 'secret', 'key'],
-      },
-      isDeferred: false,
-    })
-    await $.tool.register({
-      name: 'secret_set',
-      description:
-        'Sets one key of an existing Kubernetes Secret to a value the person supplies (for a token a vendor issued). ' +
-        'Without `file`, the harness opens a field where the person pastes the value, and returns at once; a message ' +
-        'arrives when it is set or cancelled. With `file`, it reads a file the person wrote and asks them to confirm. ' +
-        'The value goes to kubectl and is never shown to you: never ask for it in chat, and never read the file yourself.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          ...secretTarget,
-          key: { type: 'string', description: 'key inside the Secret to set' },
-          file: {
-            type: 'string',
-            description: 'only when the person wrote the value to a file: its absolute path; one trailing newline is dropped',
-          },
-        },
-        required: ['context', 'namespace', 'secret', 'key'],
-      },
-      isDeferred: false,
-    })
-    await $.tool.register({
-      name: 'secret_keys',
-      description:
-        'Lists the keys of a Kubernetes Secret with byte sizes and session-scoped fingerprints, never values. ' +
-        'Two keys with the same fingerprint hold the same value.',
-      inputSchema: { type: 'object', properties: secretTarget, required: ['context', 'namespace', 'secret'] },
-      isDeferred: false,
-    })
-    await $.tool.register({
-      name: 'leak_check',
-      description:
-        'Searches files for every Secret value this guard has minted or read in this session and answers only the names ' +
-        'of files that hold one. Default folders: ~/.claude (transcripts, history, debug logs) and Claude Code\'s temp ' +
-        'folder (the raw output of Monitors and background commands).',
-      inputSchema: {
-        type: 'object',
-        properties: { paths: { type: 'array', items: { type: 'string' }, description: 'absolute folders or files' } },
-      },
-      isDeferred: false,
+        'Facts for configuring infra-handrail (see its configure skill): which infra CLIs are installed; the names of kube ' +
+        'contexts, gcloud configurations, AWS profiles and argocd contexts, and which match prodPattern; counts from its ' +
+        'audit log; and how often each CLI appears in shell history, with how many of its writes named no target. Names ' +
+        'and counts only: no history line, credential or Secret value.',
+      inputSchema: { type: 'object', properties: {} },
+      isDeferred: true,
     })
     await $.command.register({ name: 'timeline', description: 'Infrastructure changes run from Claude Code, newest first', argumentHint: '[count]' })
     await refresh($)
@@ -745,11 +795,11 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('tool.call', { tool: 'mcp__infra-guard__watch_start' }, ($, e) => startWatch($, e as Record<string, unknown>)).catch(() => ({
+  on('tool.call', { tool: 'mcp__infra-handrail__watch_start' }, ($, e) => startWatch($, e as Record<string, unknown>)).catch(() => ({
     deny: `${PLUGIN}: starting the watch failed`,
   }))
 
-  on('tool.call', { tool: 'mcp__infra-guard__watch_stop' }, async ($, e) => {
+  on('tool.call', { tool: 'mcp__infra-handrail__watch_stop' }, async ($, e) => {
     const id = (e as Record<string, unknown>).id
     const all = await read($, watches)
     if (!all.some(w => w.id === id && w.state === 'running')) return { deny: `no running watch ${String(id)}` }
@@ -757,7 +807,7 @@ export const register: Register = (on, options) => {
     return { result: `stopped ${String(id)}` }
   }).catch(() => ({ deny: `${PLUGIN}: stopping the watch failed` }))
 
-  on('tool.call', { tool: 'mcp__infra-guard__secret_rotate' }, async ($, e) => {
+  on('tool.call', { tool: 'mcp__infra-handrail__secret_rotate' }, async ($, e) => {
     const started = await $.clock.now()
     const r = await rotate($, e as Record<string, unknown>)
     await recordSecretWrite($, 'secret_rotate', e as Record<string, unknown>, r, started).catch(() => undefined)
@@ -765,7 +815,7 @@ export const register: Register = (on, options) => {
   }).catch(() => ({
     deny: `${PLUGIN}: the rotation failed before it reported`,
   }))
-  on('tool.call', { tool: 'mcp__infra-guard__secret_set' }, async ($, e) => {
+  on('tool.call', { tool: 'mcp__infra-handrail__secret_set' }, async ($, e) => {
     const input = e as Record<string, unknown>
     const started = await $.clock.now()
     // An opened field is logged when the paste ends (endPaste); a refusal now.
@@ -775,29 +825,33 @@ export const register: Register = (on, options) => {
   }).catch(() => ({
     deny: `${PLUGIN}: setting the value failed before it reported`,
   }))
-  on('tool.call', { tool: 'mcp__infra-guard__secret_keys' }, ($, e) => listKeys($, e as Record<string, unknown>)).catch(() => ({
+  on('tool.call', { tool: 'mcp__infra-handrail__secret_keys' }, ($, e) => listKeys($, e as Record<string, unknown>)).catch(() => ({
     deny: `${PLUGIN}: listing the keys failed`,
   }))
-  on('tool.call', { tool: 'mcp__infra-guard__leak_check' }, ($, e) => leakCheck($, e as Record<string, unknown>)).catch(() => ({
+  on('tool.call', { tool: 'mcp__infra-handrail__leak_check' }, ($, e) => leakCheck($, e as Record<string, unknown>)).catch(() => ({
     deny: `${PLUGIN}: the leak check failed`,
   }))
+  on('tool.call', { tool: 'mcp__infra-handrail__config_facts' }, async $ => ({
+    result: JSON.stringify(await configFacts($, prod, ((await $.store.get(AUDIT_KEY)) as AuditEntry[] | undefined) ?? []), null, 2),
+  })).catch(() => ({ deny: `${PLUGIN}: gathering the facts failed` }))
 
   on('command.run', { command: 'timeline' }, async ($, e) => {
     const n = Number.parseInt(e.args.trim() || '20', 10)
     const kept = ((await $.store.get(AUDIT_KEY)) as AuditEntry[] | undefined) ?? []
-    return { text: timeline(kept, Number.isFinite(n) && n > 0 ? Math.min(n, 200) : 20) }
+    const off = config.audit ? '' : '\n\nThe audit option is off: nothing new is logged.'
+    return { text: timeline(kept, Number.isFinite(n) && n > 0 ? Math.min(n, 200) : 20) + off }
   })
 
   const checkFailed = `${PLUGIN}: its check failed, so the command was refused`
   // A check that failed before the command ran refuses it only when the line
   // could run an infra CLI or a script; any other runs, its output still checked.
-  on('tool.call', { tool: 'Bash' }, ($, e, next) => guarded($, e.command, e.tool_use_id, () => next(e), reads, prod)).catch(async ($, e, next) =>
+  on('tool.call', { tool: 'Bash' }, ($, e, next) => guarded($, e.command, e.tool_use_id, () => next(e))).catch(async ($, e, next) =>
     next.called || !mentionsInfra(e.command) ? withheld(await next(e)) : { deny: checkFailed },
   )
   // A Monitor runs its command in the same shell as Bash; one that opens a
   // WebSocket runs none. Its events reach Claude as notifications (below).
   on('tool.call', { tool: 'Monitor' }, ($, e, next) =>
-    e.command === undefined ? next(e) : guarded($, e.command, e.tool_use_id, () => next(e), reads, prod),
+    e.command === undefined ? next(e) : guarded($, e.command, e.tool_use_id, () => next(e)),
   ).catch(async ($, e, next) =>
     next.called || e.command === undefined || !mentionsInfra(e.command) ? withheld(await next(e)) : { deny: checkFailed },
   )
@@ -873,7 +927,7 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const t = await read($, targets)
+    const t = config.band ? await read($, targets) : null
     const all = await read($, watches)
     const paste = await read($, pending)
     const skipped = await read($, scrubSkipped)
@@ -891,19 +945,17 @@ export const register: Register = (on, options) => {
     }
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row">
-          {part('kube', 'kube', t?.kube)}
-          {part('gcloud', 'gcloud', t?.gcloud)}
-          {part('gh', 'gh', t?.gh)}
-          {part('aws', 'aws', t?.aws)}
-          {part('argocd', 'argocd', t?.argocd)}
-        </Box>
+        {t !== null && (
+          <Box key="targets" flexDirection="row">
+            {config.targets.map(name => part(name, name, t[name]))}
+          </Box>
+        )}
         {shown.map(w => (
           <Text key={w.id} color={w.state === 'running' ? 'suggestion' : w.state === 'done' ? 'success' : 'warning'}>
             {`${w.state === 'running' ? 'watching' : w.state} ${w.label}: ${w.status}`}
           </Text>
         ))}
-        {skipped && (
+        {skipped && config.secretTools && (
           <Text key="scrub-off" color="warning">
             {`${PLUGIN}: transcript scrub is off, another plugin sends stored rows past this one. Run leak_check after Secret work.`}
           </Text>

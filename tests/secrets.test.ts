@@ -3,9 +3,9 @@ import { expect, mock, test } from 'claude-code/testing'
 import { leakPatterns, managedBy } from '../hooks/secrets'
 import { BAND, engine, exited, PANE, refused } from './helpers'
 
-const ROTATE = 'mcp__infra-guard__secret_rotate'
-const SET = 'mcp__infra-guard__secret_set'
-const LEAK = 'mcp__infra-guard__leak_check'
+const ROTATE = 'mcp__infra-handrail__secret_rotate'
+const SET = 'mcp__infra-handrail__secret_set'
+const LEAK = 'mcp__infra-handrail__leak_check'
 
 test('refuses commands that print Secret data', async ($, on) => {
   const { ran } = engine(on)
@@ -270,7 +270,7 @@ test('secret_set opens a pane to paste into, writes the value, and tells Claude 
   expect(String(r.result)).toContain('in a pane')
   expect(s.written).toBe('')
 
-  const ui = await $.ui.mount({ plugin: 'infra-guard', surface: 'terminal', component: 'Pane', requestId: 'secret-paste', props: PANE })
+  const ui = await $.ui.mount({ plugin: 'infra-handrail', surface: 'terminal', component: 'Pane', requestId: 'secret-paste', props: PANE })
   await ui.input({ key: 'secret-value', text: `${value}\n` })
   expect(atob((JSON.parse(s.written) as { data: { VENDOR: string } }).data.VENDOR)).toBe(value)
   expect(s.closed).toContain('secret-paste')
@@ -289,11 +289,11 @@ test('where no pane is placed the band holds the field, and Cancel writes nothin
   const r = await $.tool.call(TARGET)
   expect(String(r.result)).toContain('above the prompt')
 
-  const ui = await $.ui.mount({ plugin: 'infra-guard', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+  const ui = await $.ui.mount({ plugin: 'infra-handrail', surface: 'terminal', component: 'AbovePrompt', props: BAND })
   expect(await ui.find({ key: 'secret-value' })).toBeDefined()
   await ui.press({ key: 'secret-cancel' })
   expect(s.written).toBe('')
-  expect(s.told).toEqual(['infra-guard: the person cancelled secret_set for VENDOR'])
+  expect(s.told).toEqual(['infra-handrail: the person cancelled secret_set for VENDOR'])
   await ui.redraw(BAND)
   expect(await ui.find({ key: 'secret-value' })).toBeUndefined()
 })
@@ -304,7 +304,7 @@ test('an empty Enter keeps the field; one paste waits at a time', async ($, on) 
   await $.tool.call(TARGET)
   expect(refused(await $.tool.call({ ...TARGET, key: 'OTHER' }))).toContain('already waiting')
 
-  const ui = await $.ui.mount({ plugin: 'infra-guard', surface: 'terminal', component: 'Pane', requestId: 'secret-paste', props: PANE })
+  const ui = await $.ui.mount({ plugin: 'infra-handrail', surface: 'terminal', component: 'Pane', requestId: 'secret-paste', props: PANE })
   await ui.input({ key: 'secret-value', text: '\n' })
   expect(s.told.length).toBe(0)
   await ui.input({ key: 'secret-value', text: 'pasted-token-0b7d22e9' })
@@ -327,7 +327,7 @@ test('a paste is logged when it ends, without the value', async ($, on) => {
   pasting(on, { placed: true })
   await $.tool.call(TARGET)
   expect(audit().length).toBe(0)
-  const ui = await $.ui.mount({ plugin: 'infra-guard', surface: 'terminal', component: 'Pane', requestId: 'secret-paste', props: PANE })
+  const ui = await $.ui.mount({ plugin: 'infra-handrail', surface: 'terminal', component: 'Pane', requestId: 'secret-paste', props: PANE })
   await ui.input({ key: 'secret-value', text: value })
   expect(audit().at(-1)?.command).toBe('secret_set spike/app key VENDOR on context k3d-ksg-spike')
   expect(audit().at(-1)?.outcome).toBe('ok')
@@ -391,7 +391,7 @@ test('says so in the band when stored rows pass it by, and asks Claude to offer 
   })
   on('prompt.submit', ($, e) => ({ text: e.text }))
   await $.tool.call({ tool: 'Bash', command: 'ls' })
-  const ui = await $.ui.mount({ plugin: 'infra-guard', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+  const ui = await $.ui.mount({ plugin: 'infra-handrail', surface: 'terminal', component: 'AbovePrompt', props: BAND })
   expect(await ui.find({ text: /transcript scrub is off/ })).toBeUndefined()
   await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false })
   await ui.redraw(BAND)
@@ -407,7 +407,7 @@ test('says nothing while the result rows come by', async ($, on) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   await $.tool.call({ tool: 'Bash', command: 'ls' })
   // The tool's result row, raised as the engine stores it; with a plugin above
-  // that sends rows on past infra-guard, none comes by.
+  // that sends rows on past infra-handrail, none comes by.
   await $.session.append({
     door: 'tool-result',
     origin: { kind: 'tool', tool: 'Bash' },
@@ -415,7 +415,7 @@ test('says nothing while the result rows come by', async ($, on) => {
     message: { type: 'user', role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] },
   })
   await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false })
-  const ui = await $.ui.mount({ plugin: 'infra-guard', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+  const ui = await $.ui.mount({ plugin: 'infra-handrail', surface: 'terminal', component: 'AbovePrompt', props: BAND })
   expect(await ui.find({ text: /transcript scrub is off/ })).toBeUndefined()
 })
 

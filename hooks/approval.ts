@@ -19,5 +19,5 @@ export function shown(command: string): { text: string; whole: boolean } {
 // (by tool_use_id): a deny from a settings rule still stands.
 export function settle<V extends Verdict>(verdict: V, id: string | undefined, approved: ReadonlySet<string>): V | Verdict {
   if (verdict.decision !== 'ask' || id === undefined || !approved.has(id)) return verdict
-  return { decision: 'allow', reason: 'infra-guard: the person approved this call in its dialog' }
+  return { decision: 'allow', reason: 'infra-handrail: the person approved this call in its dialog' }
 }

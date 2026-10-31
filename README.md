@@ -1,20 +1,24 @@
-# infra-guard
+# infra-handrail
 
-[![test](https://github.com/dfgh012316/infra-guard/actions/workflows/test.yml/badge.svg)](https://github.com/dfgh012316/infra-guard/actions/workflows/test.yml)
+[![test](https://github.com/dfgh012316/infra-handrail/actions/workflows/test.yml/badge.svg)](https://github.com/dfgh012316/infra-handrail/actions/workflows/test.yml)
 
 Guardrails for infrastructure work in [Claude Code](https://code.claude.com). It shows which cluster, project and account Claude is pointed at, makes cluster changes name their target, reads scripts before they run, gates `terraform apply` on a plan a person approved, and lets Claude rotate Kubernetes Secrets without ever seeing the values.
 
+Formerly **infra-guard**: the name was taken by another Claude Code plugin.
+
 It is a Claude Code **mod**: a plugin with a hooks module that runs inside Claude Code, so the checks run on every tool call instead of depending on Claude remembering a rule in `CLAUDE.md`.
 
-> Status: 1.0 (see [Versioning](#versioning)). The unit tests run on every push and daily against the newest Claude Code release (CI above). Each release is also run through the in-session checks in [docs/verification.md](docs/verification.md), which records the runs: 1.0.0 passed them all on the Linux CLI (WSL2) with Claude Code 2.1.316. The guards through 0.5 were also tested on the macOS CLI with 2.1.302 against GKE (all but `secret_rotate` and `secret_set`). In the VS Code extension Claude Code draws nothing a mod draws, so there is no band and the script check asks in a dialog (untested). If you do not see the target line above the prompt in a terminal, the guards are not running.
+> Status: 1.0 (see [Versioning](#versioning)). The unit tests run on every push and daily against the newest Claude Code release (CI above). Each release is also run through the in-session checks in [docs/verification.md](docs/verification.md), which records the runs: 1.0.0 passed all eight sections on the Linux CLI (WSL2) with Claude Code 2.1.316, the first seven before the rename and the options, the options' own after. The guards through 0.5 were also tested on the macOS CLI with 2.1.302 against GKE (all but `secret_rotate` and `secret_set`). In the VS Code extension Claude Code draws nothing a mod draws, so there is no band and the script check asks in a dialog (untested). If you do not see the target line above the prompt in a terminal, the guards are not running.
 
 ## Why
 
 A deploy script took `upgrade.sh <chart> <env>`. The `<env>` argument only picked `values-<env>.yaml`; the cluster was whatever kube-context happened to be current, and the script neither printed nor accepted one. Run while the context pointed at another environment, it applied one environment's values to the other's release.
 
-Reading that script before running it was not enough: it was read to see how it built the helm command, not to see what it silently inherited. infra-guard reads it for that, every time.
+Reading that script before running it was not enough: it was read to see how it built the helm command, not to see what it silently inherited. infra-handrail reads it for that, every time.
 
 ## What it does
+
+Every guard is on by default; each can be scoped to production targets or switched off (see [Configuration](#configuration)).
 
 | Guard | Behavior |
 | --- | --- |
@@ -31,48 +35,73 @@ Reading that script before running it was not enough: it was read to see how it 
 
 | Tool | Does |
 | --- | --- |
-| `mcp__infra-guard__secret_rotate` | Sets a key to a new random value (16–128 characters) after confirmation, then reads it back to verify. |
-| `mcp__infra-guard__secret_set` | Same, with a value the person supplies (a token a vendor issued). By default the mod opens a field to paste it into: a pane that takes the keys at once, or, where no pane is placed, a field above the prompt that ctrl+x tab reaches. It returns at once, and Claude gets a message when the value is set or cancelled (Cancel, or Esc in the pane). With `file`, it reads a file the person wrote instead (an absolute path; one trailing newline is dropped) and asks to confirm with its length and fingerprint. |
-| `mcp__infra-guard__secret_keys` | Lists keys with byte sizes and session-scoped fingerprints; warns when `last-applied-configuration` holds a plaintext copy. |
-| `mcp__infra-guard__leak_check` | Searches files for every value the mod has seen this session and answers file names only. By default it searches `~/.claude` and Claude Code's temp folder (`$CLAUDE_CODE_TMPDIR`, else the system's, then `claude-<uid>`), where a `Monitor`'s or background command's raw output lands. |
-| `mcp__infra-guard__watch_start` / `watch_stop` | Start or stop a rollout or GitHub Actions watch. |
+| `mcp__infra-handrail__secret_rotate` | Sets a key to a new random value (16–128 characters) after confirmation, then reads it back to verify. |
+| `mcp__infra-handrail__secret_set` | Same, with a value the person supplies (a token a vendor issued). By default the mod opens a field to paste it into: a pane that takes the keys at once, or, where no pane is placed, a field above the prompt that ctrl+x tab reaches. It returns at once, and Claude gets a message when the value is set or cancelled (Cancel, or Esc in the pane). With `file`, it reads a file the person wrote instead (an absolute path; one trailing newline is dropped) and asks to confirm with its length and fingerprint. |
+| `mcp__infra-handrail__secret_keys` | Lists keys with byte sizes and session-scoped fingerprints; warns when `last-applied-configuration` holds a plaintext copy. |
+| `mcp__infra-handrail__leak_check` | Searches files for every value the mod has seen this session and answers file names only. By default it searches `~/.claude` and Claude Code's temp folder (`$CLAUDE_CODE_TMPDIR`, else the system's, then `claude-<uid>`), where a `Monitor`'s or background command's raw output lands. |
+| `mcp__infra-handrail__watch_start` / `watch_stop` | Start or stop a rollout or GitHub Actions watch. |
+| `mcp__infra-handrail__config_facts` | The facts the configure skill decides the options from (see [Let Claude configure it](#let-claude-configure-it)). Deferred: it costs nothing until loaded. |
 
 ## Install
 
 ```sh
-claude plugin marketplace add dfgh012316/infra-guard
-claude plugin install infra-guard@jerrytech
+claude plugin marketplace add dfgh012316/infra-handrail
+claude plugin install infra-handrail@jerrytech
 ```
 
-Or from inside a session: `/plugin install infra-guard --marketplace dfgh012316/infra-guard`.
+Or from inside a session: `/plugin install infra-handrail --marketplace dfgh012316/infra-handrail`.
 
-Requires a Claude Code release with mods. Auto-update is off by default for third-party marketplaces: run `claude plugin update infra-guard@jerrytech`, or turn on auto-update for the `jerrytech` marketplace under `/plugin` → Marketplaces.
+Had it as infra-guard? Remove that first, or both run: `claude plugin uninstall infra-guard@jerrytech`. Its options do not carry over, nor does its audit log.
 
-To try it for one session without installing: `claude --plugin-dir /path/to/infra-guard`.
+Requires a Claude Code release with mods. Auto-update is off by default for third-party marketplaces: run `claude plugin update infra-handrail@jerrytech`, or turn on auto-update for the `jerrytech` marketplace under `/plugin` → Marketplaces.
+
+To try it for one session without installing: `claude --plugin-dir /path/to/infra-handrail`.
 
 ## Configuration
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `prodPattern` | `prod\|prd\|production` | Case-insensitive regular expression. A target name that matches is shown and confirmed as production. Add the names that do not say so: a GCP project id, the cluster that runs production's Argo CD, the Argo CD host. |
+| `namedTargets` | `always` | When a cluster change must name its context: `always`, `production` (only when the context it would take matches `prodPattern`), or `off`. |
+| `scriptCheck` | `always` | When a script that acts on the ambient target waits for review: `always`, `production` (only when an ambient target matches `prodPattern`), or `off`. |
+| `terraformGate` | `true` | `apply` only from a saved plan you approved; `destroy` only after you confirm. |
+| `secretGuard` | `true` | Refuse commands that would print Secret data. |
 | `allowHelmGet` | `false` | Let `helm get values`, `helm get manifest` and `helm get all` run. Turn it on where chart values hold no credentials; a Secret a chart renders still prints with the manifest. |
+| `secretTools` | `true` | Register `secret_rotate`, `secret_set`, `secret_keys` and `leak_check`. Output is withheld only for values these tools handled, so off means four fewer tools and no withholding. |
+| `watchTools` | `true` | Register `watch_start` and `watch_stop`. |
+| `targets` | `kube,gcloud,gh,aws,argocd` | Comma-separated targets to read, show and judge production by. One left out is never read. |
+| `band` | `true` | Show the targets in a row above the prompt. |
+| `audit` | `true` | Log for `/timeline`. |
+| `approveAtPermissionCheck` | `true` | Allow, at the permission check, a call you approved in the mod's review or dialog (see Approval above). Off: the permission mode decides it alone. |
 
-Set it in `/config`, or under `pluginConfigs` in `settings.json`.
+Set them under `/plugin` → infra-handrail → Configure options, with `claude plugin configure infra-handrail@jerrytech`, or under `pluginConfigs` in `settings.json`. A running session keeps its options until `/reload-plugins` or a restart.
+
+### Let Claude configure it
+
+Ask Claude to configure infra-handrail (the plugin's `configure` skill, `/infra-handrail:configure`). Claude calls `config_facts`, which answers names and counts only:
+
+- which infra CLIs are installed;
+- the names of your kube contexts, gcloud configurations, AWS profiles and argocd contexts, and which match `prodPattern`;
+- the audit log, counted by outcome and by the guard that refused;
+- how often each CLI appears in your shell history (zsh, bash and fish, the newest 20,000 lines of each), and how many of its writes named no target.
+
+No history line, credential or config value other than a name leaves the mod. Claude proposes the options that should change with the facts behind each, and saves only what you agree to. Whatever the options say, a command that saves infra-handrail's options or disables or uninstalls it (`claude plugin configure infra-handrail… --values-stdin`, `claude plugin disable infra-handrail…`) asks you first.
 
 ## What it is not
 
-infra-guard catches mistakes. It does not stop someone, or a model, determined to get around it.
+infra-handrail catches mistakes. It does not stop someone, or a model, determined to get around it.
 
 - **It reads command lines; it is not a shell.** No variable expansion, aliases or functions. Makefile targets, paths built from variables (`"$DIR/x.sh"`), and deploy tools written in Python or Go are invisible to the script check. Commands outside its lists (for example kubectl plugins) are not treated as writes.
 - **The real wall is permissions.** Give the kube identity Claude uses no `get secrets` and no production write access, and keep a privileged kubeconfig for the secret tools (they take an absolute `kubeconfig` path). The command-line guards only protect against slips.
 - **Known Secret values live in memory, for the current load only.** A reload or restart forgets them, and a value the mod never minted or read is not caught. Values shorter than 8 characters are not tracked. Wrapped or URL-safe base64 and partial prints can slip through. `leak_check` looks for a multi-line value (a PEM) line by line, so a file it names holds at least one whole line of a value.
-- **Another plugin can step past the transcript scrub.** Hooks nest by tier: plugins an administrator manages run outside the ones a person installs, and one of them may send `session.append` on beneath this mod, so stored rows are not scrubbed (Claude Code says so in the transcript, as `infra-guard: its session.append hook was skipped`). The mod notices once a turn starts after tool calls none of whose result rows reached it: the band then reads `transcript scrub is off`, and a `secret_rotate` or `secret_set` write asks Claude to offer `leak_check`. Output withholding happens in `tool.call` and is not affected by that.
-- **Another plugin can step past the approval, too.** The same tiers hold for `tool.check`: when an administrator-managed plugin sends it on beneath this mod (Claude Code says so, as `infra-guard: its tool.check hook was skipped`), a script approved in the review or a plan approved in its dialog gets no allow from the mod at the permission check. The rerun is still matched against what was reviewed, but the permission mode decides it alone: it may ask again, or in auto mode its classifier may refuse it, and no `allowed this command at the permission check` line appears. The notice concerns that one step: the command checks run in `tool.call` and stay on. Claude Code prints it once per load, so it can appear beside a call the mod did allow.
+- **Another plugin can step past the transcript scrub.** Hooks nest by tier: plugins an administrator manages run outside the ones a person installs, and one of them may send `session.append` on beneath this mod, so stored rows are not scrubbed (Claude Code says so in the transcript, as `infra-handrail: its session.append hook was skipped`). The mod notices once a turn starts after tool calls none of whose result rows reached it: the band then reads `transcript scrub is off`, and a `secret_rotate` or `secret_set` write asks Claude to offer `leak_check`. Output withholding happens in `tool.call` and is not affected by that.
+- **Another plugin can step past the approval, too.** The same tiers hold for `tool.check`: when an administrator-managed plugin sends it on beneath this mod (Claude Code says so, as `infra-handrail: its tool.check hook was skipped`), a script approved in the review or a plan approved in its dialog gets no allow from the mod at the permission check. The rerun is still matched against what was reviewed, but the permission mode decides it alone: it may ask again, or in auto mode its classifier may refuse it, and no `allowed this command at the permission check` line appears. The notice concerns that one step: the command checks run in `tool.call` and stay on. Claude Code prints it once per load, so it can appear beside a call the mod did allow.
 - **`kubectl apply` leaves old values behind.** A Secret created with `kubectl apply` keeps a plaintext copy in the `kubectl.kubernetes.io/last-applied-configuration` annotation. `secret_keys` warns about it; the mod does not remove it.
 - **Dialog answers can leave the machine.** In proxy captures of Claude Code 2.1.302 signed in with claude.ai, a value typed into a dialog (under "Other") never reached the model or the local transcript. With [Remote Control](https://code.claude.com/docs/en/remote-control) connected (as `remoteControlAtStartup: true` does for every session), it was sent to Anthropic in the session's event stream (`POST /v1/code/sessions/<id>/worker/events`). With Remote Control off, the session sent no `/v1/code/sessions` requests, and the value was in none of its 44 requests. Remote Control is one setting away for every session, so `secret_set` never takes a value through a dialog, and the mod's dialogs carry only key names, lengths and fingerprints. In the same kind of capture, with Remote Control connected, a value pasted into the mod's own field (0.5.0) appeared in none of the 208 requests the session sent, nor in any of Claude Code's files on disk.
 - **The paste field shows what you paste.** It has no masked mode; it closes on Enter. A pane the mod opens on its own is placed from 144 terminal columns; narrower, the field sits above the prompt instead.
 - **The value file is yours to guard.** Claude is told only its path. The mod knows the value once it has read the file, so output carrying it is withheld from then on; a read of the file before that is not caught. Write it in your own terminal and delete it when the Secret is set.
 - **Claude Code writes some output to disk before the mod sees it.** A `Monitor`'s events and a background command's output go to `tasks/<id>.output` under Claude Code's temp folder, and a result too large to inline to `tool-results/` under `~/.claude/projects/`. Withholding a result or dropping a notification keeps a value from Claude, not off the disk. `leak_check` searches both by default; delete the files it names.
+- **Its options live in your settings.** A command that changes them is asked about, but an edit to `settings.json` itself is left to Claude Code's permission check.
 - **The audit log is local.** Plaintext JSON under `~/.claude/plugins/store/`, last 1000 entries, shared by sessions on the machine, not atomic and not tamper-proof. It records commands Claude ran and the secret tools' writes, never a value.
 - **Failures.** If the Bash or Monitor check throws before the command runs, a line that names an infra CLI or a script (by spelling alone) is refused, and any other runs with its output still checked; if the output check throws, the output is withheld. Claude Code skips a hook whose own error handler fails, so this is not a guarantee.
 - **Mods are not sandboxed.** This one runs `kubectl`, `terraform`, `gh` and `grep` as you, and reads gcloud, gh and AWS config files. It makes no network requests of its own. Run `claude plugin validate .` to list every hook and API it uses.
@@ -103,7 +132,7 @@ Engine behavior worth knowing:
 
 ## Versioning
 
-From 1.0.0, versions follow [semver](https://semver.org) for what you configure or call: the tools and their inputs, the `prodPattern` and `allowHelmGet` options, and `/timeline`. A minor release may guard more (another CLI, another way to print a Secret), so a command that ran before can be refused after it; a major release renames or removes one of those. Refusal texts, what the band and the panes draw, and the audit file's format can change in any release.
+From 1.0.0, versions follow [semver](https://semver.org) for what you configure or call: the tools and their inputs, the options and their defaults, the `configure` skill's name, and `/timeline`. A minor release may guard more (another CLI, another way to print a Secret), so a command that ran before can be refused after it; a major release renames or removes one of those. Refusal texts, what the band and the panes draw, and the audit file's format can change in any release.
 
 ## License
 

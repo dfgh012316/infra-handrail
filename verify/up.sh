@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# infra-guard verification fixture: it exits before anything runs.
+# infra-handrail verification fixture: it exits before anything runs.
 # Line 8 runs helm on the ambient kube-context, which the script check flags.
 set -euo pipefail
 ENV="${2:-dev}"

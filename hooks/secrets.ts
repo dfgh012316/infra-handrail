@@ -26,10 +26,10 @@ type SecretObject = {
   }
 }
 
-export const ROTATE = 'mcp__infra-guard__secret_rotate'
-export const SET = 'mcp__infra-guard__secret_set'
-export const KEYS = 'mcp__infra-guard__secret_keys'
-export const REDACTED = '[infra-guard: redacted]'
+export const ROTATE = 'mcp__infra-handrail__secret_rotate'
+export const SET = 'mcp__infra-handrail__secret_set'
+export const KEYS = 'mcp__infra-handrail__secret_keys'
+export const REDACTED = '[infra-handrail: redacted]'
 
 const LAST_APPLIED = 'kubectl.kubernetes.io/last-applied-configuration'
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
