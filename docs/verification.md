@@ -23,7 +23,8 @@ cd /tmp/ig-verify/work && KUBECONFIG=/tmp/ig-verify/kubeconfig claude --plugin-d
 
 ```sh
 claude plugin enable infra-handrail@jerrytech
-k3d cluster delete ig-verify; rm -rf /tmp/ig-verify
+# k3d removes a deleted cluster from the kubeconfig KUBECONFIG names, else from yours:
+KUBECONFIG=/tmp/ig-verify/k3d.yaml k3d cluster delete ig-verify; rm -rf /tmp/ig-verify
 # Claude Code's own files for the sandbox session, a Monitor's raw output among them:
 rm -rf "${CLAUDE_CODE_TMPDIR:-${TMPDIR:-/tmp}}/claude-$(id -u)/-tmp-ig-verify-work"
 ```
@@ -126,6 +127,8 @@ cd /tmp/ig-verify/work && KUBECONFIG=/tmp/ig-verify/kubeconfig claude --plugin-d
 verify/demo/setup.sh                 # under /tmp/handrail-demo; your kubeconfig is not touched
 python3 verify/demo/record.py        # drives Claude Code in a tmux server of its own, saves frames.jsonl
 python3 verify/demo/tosvg.py /tmp/handrail-demo/frames.jsonl docs/demo.svg
+tmux -L handrail-demo kill-server
+KUBECONFIG=/tmp/handrail-demo/kubeconfig k3d cluster delete handrail-staging handrail-production; rm -rf /tmp/handrail-demo
 ```
 
 Claude's replies differ from run to run; read the frames before replacing the file. `record.py` stops, naming the step, if the review or the paste field does not open.

@@ -60,4 +60,5 @@ EOF
 printf 'set -g default-terminal tmux-256color\nset -as terminal-features ",*:RGB"\n' > "$DEMO/tmux.conf"
 
 echo "Sandbox ready in $DEMO. Record with: python3 verify/demo/record.py"
-echo "When done: tmux -L handrail-demo kill-server; k3d cluster delete handrail-staging handrail-production; rm -rf $DEMO"
+# k3d removes a deleted cluster from the kubeconfig KUBECONFIG names, else from yours.
+echo "When done: tmux -L handrail-demo kill-server; KUBECONFIG=$DEMO/kubeconfig k3d cluster delete handrail-staging handrail-production; rm -rf $DEMO"
