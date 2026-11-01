@@ -2,13 +2,35 @@
 
 [![test](https://github.com/dfgh012316/infra-handrail/actions/workflows/test.yml/badge.svg)](https://github.com/dfgh012316/infra-handrail/actions/workflows/test.yml)
 
-Guardrails for infrastructure work in [Claude Code](https://code.claude.com). It shows which cluster, project and account Claude is pointed at, makes cluster changes name their target, reads scripts before they run, gates `terraform apply` on a plan a person approved, and lets Claude rotate Kubernetes Secrets without ever seeing the values.
+Guardrails for infrastructure work in [Claude Code](https://code.claude.com): see which cluster Claude is pointed at, review a deploy script before it runs, and set Kubernetes Secrets without the value ever reaching the model.
 
-Formerly **infra-guard**: the name was taken by another Claude Code plugin.
+![Claude runs a deploy script while the kube context is production. infra-handrail stops it and shows the whole script, its helm line flagged as taking the ambient target; the person cancels, and nothing runs. Then a Secret value is pasted into the mod's own field, and Claude gets back key names, sizes and fingerprints.](docs/demo.svg)
 
-It is a Claude Code **mod**: a plugin with a hooks module that runs inside Claude Code, so the checks run on every tool call instead of depending on Claude remembering a rule in `CLAUDE.md`.
+<sub>Recorded in a sandbox with fake values: two throwaway k3d clusters as the contexts staging and production, Claude Code 2.1.316. The project's CLAUDE.md gives the script's usage and asks for short replies. [verify/demo](verify/demo) records it again.</sub>
 
-> Status: 1.0 (see [Versioning](#versioning)). The unit tests run on every push and daily against the newest Claude Code release (CI above). Each release is also run through the in-session checks in [docs/verification.md](docs/verification.md), which records the runs: 1.0.0 passed all eight sections on the Linux CLI (WSL2) with Claude Code 2.1.316, the first seven before the rename and the options, the options' own after. The guards through 0.5 were also tested on the macOS CLI with 2.1.302 against GKE (all but `secret_rotate` and `secret_set`). In the VS Code extension Claude Code draws nothing a mod draws, so there is no band and the script check asks in a dialog (untested). If you do not see the target line above the prompt in a terminal, the guards are not running.
+It is a Claude Code **mod**: a plugin with a hooks module that runs inside Claude Code, so the checks run on every tool call instead of depending on Claude remembering a rule in `CLAUDE.md`. What it catches:
+
+- **The command is right, the target is not.** A `kubectl`, `helm`, `helmfile` or `argocd` change that does not name its context is refused. A line above the prompt shows the ambient kube context, gcloud project, gh account, AWS profile and argocd context, production in red.
+- **The script picks the target.** Before `./deploy.sh` (or `bash`, `source`) runs, the mod reads the script, flags each line that acts on the ambient target, and shows you all of it. You run it once, unchanged, or cancel.
+- **The plan nobody read.** `terraform apply` runs only from a saved plan: the mod counts what it adds, changes, replaces and destroys, and asks.
+- **The value in the chat.** `secret_set` takes a value in a field of the mod's own and hands it to `kubectl`; Claude gets key names, sizes and fingerprints. Output carrying a value the mod knows is withheld.
+
+It catches slips, not someone set on getting around it: see [What it is not](#what-it-is-not).
+
+## Install
+
+```sh
+claude plugin marketplace add dfgh012316/infra-handrail
+claude plugin install infra-handrail@jerrytech
+```
+
+Or from inside a session: `/plugin install infra-handrail --marketplace dfgh012316/infra-handrail`. Start a new session in a terminal: if the line of targets shows above the prompt, the guards are running.
+
+- **Where it runs.** The Claude Code CLI, in a terminal; it needs a Claude Code release with mods. In the VS Code extension Claude Code draws nothing a mod draws, so there is no band and the script check asks in a dialog (untested). Desktop app WSL sessions do not load plugins.
+- **Tested.** 1.0 (see [Versioning](#versioning)). The unit tests run on every push and daily against the newest Claude Code release (CI above). Each release is also run through the in-session checks in [docs/verification.md](docs/verification.md), which records the runs: 1.0.0 passed all eight sections on the Linux CLI (WSL2) with Claude Code 2.1.316, the first seven before the rename and the options, the options' own after. The guards through 0.5 were also tested on the macOS CLI with 2.1.302 against GKE (all but `secret_rotate` and `secret_set`).
+- **Updates.** Auto-update is off by default for third-party marketplaces: run `claude plugin update infra-handrail@jerrytech`, or turn on auto-update for the `jerrytech` marketplace under `/plugin` → Marketplaces.
+- **Formerly infra-guard**: the name was taken by another Claude Code plugin. Had it installed? Remove it first, or both run: `claude plugin uninstall infra-guard@jerrytech`. Its options do not carry over, nor does its audit log.
+- **To try it for one session** without installing: `claude --plugin-dir /path/to/infra-handrail`.
 
 ## Why
 
@@ -41,21 +63,6 @@ Every guard is on by default; each can be scoped to production targets or switch
 | `mcp__infra-handrail__leak_check` | Searches files for every value the mod has seen this session and answers file names only. By default it searches `~/.claude` and Claude Code's temp folder (`$CLAUDE_CODE_TMPDIR`, else the system's, then `claude-<uid>`), where a `Monitor`'s or background command's raw output lands. |
 | `mcp__infra-handrail__watch_start` / `watch_stop` | Start or stop a rollout or GitHub Actions watch. |
 | `mcp__infra-handrail__config_facts` | The facts the configure skill decides the options from (see [Let Claude configure it](#let-claude-configure-it)). Deferred: it costs nothing until loaded. |
-
-## Install
-
-```sh
-claude plugin marketplace add dfgh012316/infra-handrail
-claude plugin install infra-handrail@jerrytech
-```
-
-Or from inside a session: `/plugin install infra-handrail --marketplace dfgh012316/infra-handrail`.
-
-Had it as infra-guard? Remove that first, or both run: `claude plugin uninstall infra-guard@jerrytech`. Its options do not carry over, nor does its audit log.
-
-Requires a Claude Code release with mods. Auto-update is off by default for third-party marketplaces: run `claude plugin update infra-handrail@jerrytech`, or turn on auto-update for the `jerrytech` marketplace under `/plugin` → Marketplaces.
-
-To try it for one session without installing: `claude --plugin-dir /path/to/infra-handrail`.
 
 ## Configuration
 

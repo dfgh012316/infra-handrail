@@ -295,6 +295,25 @@ describe('the Bash hook', () => {
     expect(audit().at(-1)?.note).toContain('1 to add')
   })
 
+  test('asks about terraform destroy with the resources in its state', async ($, on) => {
+    const { ran, asked } = engine(on, { answer: 'Destroy 2' })
+    on('process.run', ($, e) => (e.argv[1] === 'state' ? exited(0, 'x.a\nx.b\n') : exited(0, 'dev-cluster\n')))
+    const r = await $.tool.call({ tool: 'Bash', command: 'terraform destroy' })
+    expect(refused(r)).toBeUndefined()
+    expect(asked[0]).toContain('deletes all 2 resources in its state: x.a, x.b')
+    expect(ran).toEqual(['terraform destroy'])
+  })
+
+  test('refuses terraform destroy when its state cannot be read, rather than asking about 0', async ($, on) => {
+    const { ran, asked, audit } = engine(on, { answer: 'Destroy 0' })
+    on('process.run', ($, e) => (e.argv[1] === 'state' ? exited(1, '', 'Error: Backend initialization required\n') : exited(0, 'dev-cluster\n')))
+    const r = await $.tool.call({ tool: 'Bash', command: 'terraform destroy' })
+    expect(refused(r)).toContain('could not read the state in /w: Error: Backend initialization required')
+    expect(asked.length).toBe(0)
+    expect(ran.length).toBe(0)
+    expect(audit().at(-1)?.outcome).toBe('refused')
+  })
+
   test('stops a script that runs helm on the ambient context unless the person runs it', async ($, on) => {
     const script = 'helm upgrade --install "$1" ./charts/$1 -f values-$2.yaml\n'
     const { ran } = engine(on, { files: { '/w/scripts/upgrade.sh': script } })

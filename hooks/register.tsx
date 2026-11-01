@@ -169,6 +169,8 @@ async function terraformGate($: Engine, command: string, w: Where, line: Shown):
       continue
     }
     const state = await $.process.run([run.tool, 'state', 'list'], { cwd: run.dir, timeoutMs: 60_000 })
+    // An unread state would ask about destroying 0 resources.
+    if (state.exitCode !== 0) return { deny: `${PLUGIN}: could not read the state in ${dir}: ${state.stderr.trim().slice(0, 300)}` }
     const items = state.stdout.split('\n').filter(Boolean)
     const question = [
       `${run.tool} destroy in ${dir} deletes all ${items.length} resources in its state${items.length > 0 ? `: ${list(items)}` : ''}.`,

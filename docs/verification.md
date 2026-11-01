@@ -118,12 +118,25 @@ cd /tmp/ig-verify/work && KUBECONFIG=/tmp/ig-verify/kubeconfig claude --plugin-d
 - Commands that print Secret data (0.2): asking Claude to run one is asking it to read a credential, so no check here does.
 - Output carrying a known value, withheld from any tool (0.2).
 
+## The README's demo
+
+`docs/demo.svg` is recorded in a sandbox of its own: two throwaway k3d clusters as the contexts `staging` and `production`, a Secret with fake values, and a project whose deploy script takes the ambient context.
+
+```sh
+verify/demo/setup.sh                 # under /tmp/handrail-demo; your kubeconfig is not touched
+python3 verify/demo/record.py        # drives Claude Code in a tmux server of its own, saves frames.jsonl
+python3 verify/demo/tosvg.py /tmp/handrail-demo/frames.jsonl docs/demo.svg
+```
+
+Claude's replies differ from run to run; read the frames before replacing the file. `record.py` stops, naming the step, if the review or the paste field does not open.
+
 ## Recording a run
 
-Note the run in the release's notes, and in the README's status line when it widens what was tested:
+Note the run in the release's notes, and in the README's Tested line when it widens what was tested:
 
 | Date | Version | Claude Code | OS, terminal | Sections passed | Notes |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-31 | 0.8.0 (as infra-guard) | 2.1.316 | Linux (WSL2) | 1, 2, 3, 4 (pane, cancel, approved rerun once), 5 (scrub on), 6, 7 | Not run: the edit after the review, the narrow terminal. Found: a Monitor's raw output file held the dummy value outside `leak_check`'s default folder (fixed in 1.0.0); the permission-check line read `infra-guard: infra-guard: …` (fixed). An administrator-managed plugin skipped `session.append` and `tool.check` once each at the start; both ran afterwards. |
 | 2026-11-01 | 1.0.0 (as infra-guard) | 2.1.316 | Linux (WSL2), tmux at 200×50 and 120×50 | All, 1 to 7 | Driven from a second Claude Code session through tmux. Found and fixed during the run: the pane opened a third of the terminal tall, hiding line 8 below the fold (it now asks for the review's rows), and a reload left Claude waiting on a closed review (it is now told). `leak_check` named the monitor's `tasks/<id>.output` and nothing under `~/.claude`. The `tool.check` skip notice printed beside the approved rerun the mod allowed. |
 | 2026-11-01 | 1.0.0 (infra-handrail) | 2.1.316 | Linux (WSL2), tmux at 200×50 | 8; then 1, 2 (Bash) and 4 (pane, approved rerun) on default options | Section 8 found `config_facts` reporting no CLI installed: `sh`'s loop exits 1 when the last CLI it looks up is missing, and that output was dropped (fixed, then passed). A dialog's header cut `infra-handrail` to 12 characters (now `handrail`). Sections 3, 5, 6 and 7 last ran as infra-guard 1.0.0; the code they run did not change but for the options, which default to it. |
+| 2026-11-01 | 1.0.1 | 2.1.316 | Linux (WSL2), tmux at 150×44 | 1, 4 (pane, cancel) and the paste field of 6 (set, verified) | The README's demo, recorded with `verify/demo` on two k3d clusters, without your settings and CLAUDE.md (`--setting-sources project,local`). The release's fix (`terraform destroy` whose state cannot be read is refused) is covered by the unit tests. An administrator-managed plugin skipped `session.append` once, at the first prompt; the demo drops that row. |
